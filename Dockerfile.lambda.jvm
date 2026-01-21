@@ -1,0 +1,29 @@
+####
+# This Dockerfile builds a JVM-based Lambda-compatible image for the Quarkus application.
+# JVM build is faster than native but has slightly longer cold start times.
+####
+
+# Stage 1: Build the application
+FROM gradle:8.5-jdk17 AS builder
+
+WORKDIR /build
+
+# Copy Gradle wrapper and build files
+COPY build.gradle .
+COPY settings.gradle .
+COPY gradle.properties .
+
+# Copy source code
+COPY src src
+
+# Build the application
+RUN gradle build -x test -Dquarkus.package.type=uber-jar
+
+# Stage 2: Create the Lambda runtime image
+FROM public.ecr.aws/lambda/java:17
+
+# Copy the uber-jar
+COPY --from=builder /build/build/*-runner.jar ${LAMBDA_TASK_ROOT}/lib/
+
+# Set the Lambda handler for Quarkus REST
+CMD [ "io.quarkus.amazon.lambda.runtime.QuarkusStreamHandler::handleRequest" ]

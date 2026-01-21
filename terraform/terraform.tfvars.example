@@ -1,0 +1,50 @@
+# Example Terraform Variables File
+# Copy this file to terraform.tfvars and customize the values
+
+# AWS Configuration
+aws_region  = "us-east-1"
+environment = "dev"
+
+# Project Configuration
+project_name = "unit-management"
+
+# VPC Configuration
+vpc_cidr             = "10.0.0.0/16"
+availability_zones   = ["us-east-1a", "us-east-1b"]
+private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+public_subnet_cidrs  = ["10.0.101.0/24", "10.0.102.0/24"]
+enable_nat_gateway   = true
+single_nat_gateway   = false # Set to true for cost savings in dev
+
+# DynamoDB Configuration
+dynamodb_table_name    = "units-table"
+dynamodb_billing_mode  = "PAY_PER_REQUEST" # or "PROVISIONED"
+dynamodb_read_capacity = 5                 # Only used if PROVISIONED
+dynamodb_write_capacity = 5                # Only used if PROVISIONED
+
+# ECR Configuration
+ecr_image_tag_mutability  = "MUTABLE"
+ecr_scan_on_push          = true
+ecr_image_retention_count = 10
+
+# Lambda Configuration
+container_image_tag                       = "latest"
+lambda_memory_size                        = 512  # MB (128-10240)
+lambda_timeout                            = 30   # seconds (1-900)
+lambda_enable_function_url                = false # Set to true for direct Lambda URL access
+lambda_provisioned_concurrent_executions  = 0    # Set > 0 to enable provisioned concurrency
+lambda_max_provisioned_concurrent_executions = 10 # Max for auto-scaling (if provisioned enabled)
+
+# ECS Configuration (kept for reference if reverting to ECS)
+# container_cpu       = 512  # 0.5 vCPU
+# container_memory    = 1024 # 1 GB
+# ecs_desired_count   = 2
+# ecs_min_capacity    = 2
+# ecs_max_capacity    = 10
+
+# ALB Configuration
+alb_certificate_arn            = "" # Leave empty for HTTP only, or provide ACM cert ARN for HTTPS
+alb_enable_deletion_protection = false # Set to true for production
+
+# Logging Configuration
+log_retention_days = 7 # Increase for production (e.g., 30, 90, 365)

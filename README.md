@@ -1,10 +1,10 @@
 # Unit Management Service
 
-A Quarkus-based REST API service for managing units with AWS DynamoDB as the data store.
+A Quarkus-based REST API service for managing units with AWS DynamoDB as the data store, deployed as an AWS Lambda function behind an Application Load Balancer.
 
 ## Overview
 
-This service provides CRUD operations for managing units (simple entities with an ID and name). It's designed to run behind an Application Load Balancer (ALB) and uses AWS DynamoDB for persistent storage.
+This service provides CRUD operations for managing units (simple entities with an ID and name). It's deployed as an AWS Lambda function using a ZIP package, sitting behind an Application Load Balancer (ALB), and uses AWS DynamoDB for persistent storage.
 
 ### Features
 
@@ -13,15 +13,18 @@ This service provides CRUD operations for managing units (simple entities with a
 - AWS DynamoDB integration using Enhanced Client
 - Comprehensive validation and error handling
 - Health check endpoints for ALB
-- Docker support for containerized deployment
+- Lambda deployment using Quarkus Lambda extension with ZIP packaging
+- No Docker required for deployment
+- Auto-scaling Lambda function with provisioned concurrency support
 - Extensive test coverage (unit and integration tests)
 
 ## Prerequisites
 
 - Java 17 or higher
 - Gradle 8.x (wrapper included)
-- Docker (for running tests with Testcontainers)
-- AWS credentials (for production deployment)
+- Docker (only for running tests with Testcontainers)
+- AWS CLI configured with credentials
+- Terraform (for infrastructure deployment)
 - DynamoDB table named `units-table` (provisioned externally)
 
 ## Project Structure
@@ -219,29 +222,32 @@ GET /q/health/ready
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key | - | Yes (production) |
 | `dynamodb.table.units` | DynamoDB table name | `units-table` | No |
 
-## Docker
+## Lambda ZIP Package
 
-### Building the Docker Image
+### Building the Lambda Package
+
+The service uses a ZIP package deployment which is faster to build and doesn't require Docker:
 
 ```bash
-# Build native executable (requires GraalVM)
-./gradlew build -Dquarkus.package.type=native
+# Build the application (creates an uber-jar)
+./gradlew clean build
 
-# Build JVM-based Docker image
-docker build -f src/main/docker/Dockerfile.jvm -t unit-management-service:latest .
-
-# Build native Docker image
-docker build -f src/main/docker/Dockerfile.native -t unit-management-service:native .
+# The deployment package is automatically created at build/function.zip
 ```
 
-### Running with Docker
+The Quarkus build creates an uber-jar that contains all dependencies, which is then packaged into a ZIP file for Lambda deployment.
+
+### Testing Locally
+
+For local testing without Lambda, you can run in development mode:
 
 ```bash
-docker run -p 8080:8080 \
-  -e AWS_REGION=us-east-1 \
-  -e AWS_ACCESS_KEY_ID=your-access-key \
-  -e AWS_SECRET_ACCESS_KEY=your-secret-key \
-  unit-management-service:latest
+export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=your-access-key
+export AWS_SECRET_ACCESS_KEY=your-secret-key
+
+# Run in development mode with Lambda support
+./gradlew quarkusDev
 ```
 
 ## DynamoDB Table Schema
@@ -344,48 +350,168 @@ jobs:
 
 ## Deployment
 
-### AWS Deployment Considerations
+### Infrastructure as Code (Terraform)
 
-1. **IAM Permissions:** The service requires DynamoDB read/write permissions
-2. **VPC:** Can run in public or private subnets (private recommended)
-3. **ALB Configuration:**
-   - Health check path: `/q/health`
-   - Health check interval: 30 seconds
-   - Healthy threshold: 2
-   - Unhealthy threshold: 3
-4. **Security Groups:** Allow inbound HTTP/HTTPS from ALB
-5. **Environment Variables:** Configure via ECS task definition or EC2 user data
+This project includes comprehensive Terraform configurations for deploying to AWS with production-ready Lambda infrastructure.
 
-### IAM Policy Example
+**Quick Start:**
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:DeleteItem",
-        "dynamodb:Query",
-        "dynamodb:Scan"
-      ],
-      "Resource": "arn:aws:dynamodb:us-east-1:*:table/units-table"
-    }
-  ]
-}
+```bash
+cd terraform
+terraform init
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your configuration
+terraform plan
+terraform apply
 ```
+
+**What's Included:**
+- Multi-AZ VPC with public and private subnets
+- Application Load Balancer with health checks
+- AWS Lambda function with ZIP package deployment
+- Lambda auto-scaling with provisioned concurrency (optional)
+- DynamoDB table with encryption and backups
+- IAM roles with least-privilege permissions
+- CloudWatch monitoring and alarms
+- X-Ray tracing for distributed debugging
+- Security groups with proper isolation
+
+**Key Lambda Configuration Variables:**
+- `lambda_memory_size` - Memory allocation (default: 512 MB)
+- `lambda_timeout` - Function timeout (default: 30 seconds)
+- `lambda_provisioned_concurrent_executions` - Warm instances (default: 0, disabled)
+- `lambda_enable_function_url` - Direct Lambda URL (default: false, use ALB)
+
+### Automated Deployment
+
+Use the included deployment script to build and deploy:
+
+```bash
+./terraform/deploy.sh
+```
+
+This script will:
+1. Build the Quarkus application as an uber-jar
+2. Create the Lambda deployment ZIP package
+3. Deploy the infrastructure and function via Terraform
+
+**Note:** The build process typically takes 1-2 minutes.
+
+### Manual Deployment
+
+If you prefer manual deployment or need to deploy to a different environment:
+
+1. **Build the application:**
+   ```bash
+   ./gradlew clean build
+   ```
+
+2. **Create the ZIP package:**
+   ```bash
+   cd build/quarkus-app
+   zip -r ../function.zip . -x "*.original"
+   cd ../..
+   ```
+
+3. **Deploy with Terraform:**
+   ```bash
+   cd terraform
+   terraform apply
+   ```
+
+Alternatively, update the Lambda function directly with AWS CLI:
+
+```bash
+aws lambda update-function-code \
+  --function-name <function-name> \
+  --zip-file fileb://build/function.zip \
+  --region us-east-1
+```
+
+### Environment Configuration
+
+The application requires these environment variables:
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `AWS_REGION` | AWS region for DynamoDB | Yes |
+| `AWS_ACCESS_KEY_ID` | AWS credentials | Yes (unless using IAM roles) |
+| `AWS_SECRET_ACCESS_KEY` | AWS credentials | Yes (unless using IAM roles) |
+| `dynamodb.table.units` | DynamoDB table name | No (defaults to `units-table`) |
+
+**Best Practice:** Use IAM roles (Lambda Execution Role) instead of access keys for production deployments. The Terraform configuration automatically sets up the necessary IAM permissions.
+
+## Lambda Deployment Architecture
+
+### Why Lambda?
+
+This service uses AWS Lambda for several advantages:
+- **Cost Efficiency**: Pay only for actual request processing time
+- **Auto-Scaling**: Automatic scaling from zero to thousands of requests
+- **No Server Management**: AWS manages the runtime environment
+- **Integration**: Native integration with ALB and other AWS services
+- **Simple Deployment**: ZIP packages are quick to build and deploy
+
+### Cold Start Optimization
+
+The service uses several strategies to minimize cold starts:
+1. **Uber-JAR Packaging**: Single JAR with all dependencies reduces initialization time
+2. **Provisioned Concurrency**: Can be enabled for guaranteed warm instances
+3. **Memory Allocation**: Properly sized memory (512MB default) for optimal performance
+4. **VPC Configuration**: Lambda runs in VPC for DynamoDB access
+
+### Lambda Configuration
+
+**Memory Allocation**: Default 512 MB
+- More memory = more CPU power
+- Adjust based on your workload
+- Monitor CloudWatch metrics to optimize
+
+**Timeout**: Default 30 seconds
+- Sufficient for most CRUD operations
+- Increase if you have complex queries
+- ALB has a 60-second timeout limit
+
+**Provisioned Concurrency**: Default 0 (disabled)
+- Enable for consistent low latency
+- Costs more but eliminates cold starts
+- Recommended for production traffic
+
+### Monitoring Lambda Performance
+
+Key CloudWatch metrics to monitor:
+- **Duration**: Execution time per invocation
+- **Throttles**: Requests that couldn't execute due to concurrency limits
+- **Errors**: Failed invocations
+- **ConcurrentExecutions**: Number of simultaneous executions
+- **ProvisionedConcurrencyUtilization**: If using provisioned concurrency
 
 ## Troubleshooting
 
 ### Common Issues
 
+**Lambda Function Errors:**
+- Check CloudWatch Logs for detailed error messages
+- Verify the Lambda function has the correct IAM permissions
+- Ensure the Lambda is deployed in private subnets with NAT Gateway access
+- Check that the Lambda timeout is sufficient for your operations
+
 **DynamoDB Connection Errors:**
-- Verify AWS credentials are correctly configured
+- Verify the Lambda execution role has DynamoDB permissions
 - Check that the DynamoDB table exists in the specified region
-- Ensure IAM permissions are properly configured
+- Ensure Lambda is in VPC with route to DynamoDB (via VPC endpoint or NAT)
+
+**ALB Health Check Failures:**
+- Verify the health check path is correct: `/api/q/health`
+- Check Lambda function logs for startup errors
+- Ensure Lambda timeout is longer than ALB health check timeout
+- Verify security groups allow traffic between ALB and Lambda
+
+**Cold Start Issues:**
+- Monitor Duration metrics in CloudWatch
+- Consider enabling provisioned concurrency
+- Check if memory allocation needs adjustment
+- Verify native image build completed successfully
 
 **Tests Failing:**
 - Ensure Docker is running (required for Testcontainers)
@@ -394,6 +520,7 @@ jobs:
 **Build Errors:**
 - Run `./gradlew clean build` to clean build artifacts
 - Ensure Java 17+ is installed and set as JAVA_HOME
+- For native builds, ensure Docker has sufficient resources (8GB+ RAM recommended)
 
 ## Contributing
 
